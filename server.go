@@ -473,8 +473,8 @@ func broadcastGameState(room *Room) {
 	}
 
 	for _, client := range room.Clients {
-		// Create a copy of game state
-		stateCopy := room.GameState
+		// Create a copy of game state (dereference to copy the struct)
+		stateCopy := *room.GameState
 
 		// If this client is the drawer, show them the full word
 		if client.ID == room.GameState.CurrentDrawer {
@@ -483,7 +483,7 @@ func broadcastGameState(room *Room) {
 
 		message := Message{
 			Type: "gameState",
-			Data: stateCopy,
+			Data: &stateCopy,
 		}
 
 		jsonData, err := json.Marshal(message)
@@ -607,7 +607,7 @@ func main() {
 
 	router := setupRouter()
 
-	if err := router.Run(":6000"); err != nil {
+	if err := router.Run(":42069"); err != nil {
 		log.Fatal("Failed to start server:", err)
 	}
 }
