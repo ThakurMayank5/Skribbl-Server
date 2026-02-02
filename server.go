@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -36,7 +37,6 @@ func wsHandler(c *gin.Context) {
 	// Upgrade to WebSocket
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Println("upgrade error:", err)
 		return
 	}
 	defer conn.Close()
@@ -55,7 +55,6 @@ func wsHandler(c *gin.Context) {
 	// if no player is present then make this player the owner of room
 	room.mu.Lock()
 	if len(room.Clients) == 0 {
-		log.Printf("👑 Client %s [%s] is the room owner\n", username, clientID)
 		client.Type = "owner"
 	}
 
@@ -86,11 +85,9 @@ func wsHandler(c *gin.Context) {
 	defer func() {
 		room.mu.Lock()
 		removeClientFromRoom(room, clientID)
-		log.Printf("❌ Client disconnected: %s [%s] (Total clients: %d)\n", username, clientID, len(room.Clients))
 
 		// Reset game if less than 2 players remain
 		if len(room.Clients) < 2 && room.GameState.IsActive {
-			log.Println("🔄 Less than 2 players remaining, resetting game...")
 			room.GameState = &GameState{
 				IsActive: false,
 			}
@@ -146,7 +143,6 @@ func handleMessage(client *Client, message Message) {
 	case "draw":
 		// Only allow current drawer to send draw data
 		if room.GameState.IsActive && client.ID == room.GameState.CurrentDrawer {
-			log.Printf("✏️ Draw data from %s, broadcasting to %d others\n", client.Username, len(room.Clients)-1)
 			broadcastToOthers(room, client.ID, message)
 		}
 
@@ -163,7 +159,9 @@ func handleMessage(client *Client, message Message) {
 
 		// Check if message is correct guess
 		if room.GameState.IsActive && client.ID != room.GameState.CurrentDrawer {
-			if chatMsg == room.GameState.CurrentWord && room.GameState.PlayersGuessed[client.ID] != true {
+
+			// check in small case
+			if strings.EqualFold(chatMsg, room.GameState.CurrentWord) && room.GameState.PlayersGuessed[client.ID] != true {
 				// Correct guess!
 				client.Score += 100
 
@@ -195,7 +193,6 @@ func handleMessage(client *Client, message Message) {
 				unlocked = true
 
 				if allGuessed {
-					log.Println("🎉 All players have guessed the word, ending round early")
 					endRound(room)
 				}
 
@@ -212,20 +209,15 @@ func handleMessage(client *Client, message Message) {
 
 	case "startGame":
 		// Only owner can start the game and need at least 2 players
-		log.Printf("🎮 Start game request from %s [%s] (Type: %s, IsActive: %v, Players: %d)\n", client.Username, client.ID, client.Type, room.GameState.IsActive, len(room.Clients))
 		if client.Type == "owner" && !room.GameState.IsActive && len(room.Clients) >= 2 {
-			log.Println("✅ Starting new round...")
 			startNewRound(room)
 		} else {
 			if len(room.Clients) < 2 {
-				log.Println("❌ Cannot start game - Need at least 2 players")
 				broadcastChatMessage(room, ChatMessage{
 					Username: "System",
 					Message:  "Need at least 2 players to start the game!",
 					IsSystem: true,
 				})
-			} else {
-				log.Printf("❌ Cannot start game - Owner: %v, Active: %v\n", client.Type == "owner", room.GameState.IsActive)
 			}
 		}
 
@@ -264,8 +256,6 @@ func startNewRound(room *Room) {
 
 	// if 10 rounds have been played, reset scores and send results
 	if room.GameState != nil && room.GameState.RoundNumber >= 10 {
-		log.Println("🏁 10 rounds completed, resetting scores and sending results")
-
 		// Send final results
 		results := []Player{}
 		for _, c := range room.Clients {
@@ -294,11 +284,9 @@ func startNewRound(room *Room) {
 		for _, c := range room.Clients {
 			c.Score = 0
 		}
+		room.GameState.RoundNumber = 0
 		room.GameState.PlayersGuessed = make(map[string]bool)
 	}
-
-	// This function expects room.mu to already be locked
-	log.Println("🎲 Starting new round...")
 
 	// Get next drawer
 	var drawerID string
@@ -308,11 +296,8 @@ func startNewRound(room *Room) {
 	}
 
 	if len(clientIDs) == 0 {
-		log.Println("❌ No clients to start round")
 		return
 	}
-
-	log.Printf("👥 Found %d clients\n", len(clientIDs))
 
 	// Find current drawer index
 	currentIndex := -1
@@ -328,11 +313,8 @@ func startNewRound(room *Room) {
 	drawerID = clientIDs[nextIndex]
 	room.CurrentDrawer = drawerID
 
-	log.Printf("✏️ Next drawer: %s\n", drawerID)
-
 	// Generate word choices
-	wordChoices := getRandomWords(3)
-	log.Printf("📝 Word choices: %v\n", wordChoices)
+	wordChoices := getRandomWords(5)
 
 	// Preserve round number or start at 1
 	currentRound := 0
@@ -348,8 +330,6 @@ func startNewRound(room *Room) {
 		WordChoices:    wordChoices,
 		PlayersGuessed: make(map[string]bool),
 	}
-
-	log.Printf("🎮 Game state updated - Round %d\n", room.GameState.RoundNumber)
 
 	broadcastGameState(room)
 	broadcastPlayers(room)
@@ -372,7 +352,6 @@ func startNewRound(room *Room) {
 		IsSystem: true,
 	})
 
-	log.Println("✅ Round started successfully")
 }
 
 func roundTimer(room *Room) {
@@ -420,7 +399,6 @@ func removeClientFromRoom(room *Room, clientID string) {
 		for id, c := range room.Clients {
 			if id != clientID {
 				c.Type = "owner"
-				log.Printf("👑 Client %s [%s] is the new room owner\n", c.Username, c.ID)
 				break
 			}
 		}
@@ -451,7 +429,6 @@ func broadcastPlayers(room *Room) {
 	// Marshal to JSON
 	jsonData, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("Error marshaling players: %v\n", err)
 		return
 	}
 
@@ -459,11 +436,10 @@ func broadcastPlayers(room *Room) {
 	for _, client := range room.Clients {
 		err := client.Conn.WriteMessage(websocket.TextMessage, jsonData)
 		if err != nil {
-			log.Printf("Error broadcasting to client %s: %v\n", client.ID, err)
+			continue
 		}
 	}
 
-	log.Printf("📤 Broadcasted players list to %d clients\n", len(room.Clients))
 }
 
 func broadcastGameState(room *Room) {
@@ -488,13 +464,12 @@ func broadcastGameState(room *Room) {
 
 		jsonData, err := json.Marshal(message)
 		if err != nil {
-			log.Printf("Error marshaling game state: %v\n", err)
 			continue
 		}
 
 		err = client.Conn.WriteMessage(websocket.TextMessage, jsonData)
 		if err != nil {
-			log.Printf("Error broadcasting game state to client %s: %v\n", client.ID, err)
+			continue
 		}
 	}
 }
@@ -523,13 +498,14 @@ func sendGameState(client *Client) {
 
 	jsonData, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("Error marshaling game state: %v\n", err)
 		return
 	}
 
 	err = client.Conn.WriteMessage(websocket.TextMessage, jsonData)
 	if err != nil {
-		log.Printf("Error sending game state to client %s: %v\n", client.ID, err)
+
+		return
+
 	}
 }
 
@@ -541,14 +517,13 @@ func broadcastChatMessage(room *Room, chatMsg ChatMessage) {
 
 	jsonData, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("Error marshaling chat message: %v\n", err)
 		return
 	}
 
 	for _, client := range room.Clients {
 		err := client.Conn.WriteMessage(websocket.TextMessage, jsonData)
 		if err != nil {
-			log.Printf("Error broadcasting chat to client %s: %v\n", client.ID, err)
+			continue
 		}
 	}
 }
@@ -556,23 +531,18 @@ func broadcastChatMessage(room *Room, chatMsg ChatMessage) {
 func broadcastToOthers(room *Room, senderID string, message Message) {
 	jsonData, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("Error marshaling message: %v\n", err)
 		return
 	}
 
-	log.Printf("📦 Broadcasting message: %s\n", string(jsonData))
-
 	for _, client := range room.Clients {
 		if client.ID != senderID {
-			log.Printf("  → Sending to client %s (%s)\n", client.Username, client.ID)
 			err := client.Conn.WriteMessage(websocket.TextMessage, jsonData)
 			if err != nil {
-				log.Printf("Error broadcasting to client %s: %v\n", client.ID, err)
+				continue
 			}
 		}
 	}
 
-	log.Println("✅ Broadcast complete")
 }
 
 func setupRouter() *gin.Engine {
@@ -595,6 +565,13 @@ func setupRouter() *gin.Engine {
 
 	// WebSocket route
 	router.GET("/ws", wsHandler)
+
+	// health check route
+	router.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"status": "ok",
+		})
+	})
 
 	return router
 }
